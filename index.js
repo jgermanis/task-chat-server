@@ -1,10 +1,12 @@
 const express = require('express');
 const http = require('http');
 const ws = require('ws');
+const url = require('url');
 
 const app = express();
 app.use(express.json());
-const users = [];
+const users = new Map();
+const inactivityTimeout = process.env.INACTIVITY_TIMEOUT || 30 * 1000;
 
 
 const server = http.createServer(app);
@@ -15,10 +17,10 @@ app.post('/login', function (req, res) {
   if (!req.body.user) {
     res.status(400).send('Bad request');
   }
-  if (users.includes(body.user)) {
+  if (users.keys.includes(body.user)) {
     res.status(409).send('User with such name already exists');
   } else {
-    users.push(body.user);
+    users.set(body.user, {ws: null, timeout: null});
     res.send({ user: body.user });
   }
 });
@@ -37,6 +39,23 @@ const wss = new ws.Server({ server: server, path: '/ws' });
 
 
 wss.on('connection', (ws, req) => {
+  
+
+
+  const current_url = new URL(req.headers.host + req.url);
+  const url_params = current_url.searchParams;
+  const userName = url_params.get('user');
+
+  //todo remove 
+  users.set(userName, {ws: null, timeout: null});
+
+  const user = users.get(userName);
+  user.ws = ws;
+  user.timeout = createNewTimeout(userName);
+
+  ws.isAlive = true;
+  ws.on('pong', () => ws.isAlive = true);
+
   ws.on('message', message => {
     let messageObj;
     try {
@@ -51,11 +70,21 @@ wss.on('connection', (ws, req) => {
         status: 'Success'
       }));
       broadcastMessage(ws, message);
+      resetInactivityTimer(user, userName);
     } else {
       returnError(ws, 'Data not valid');
     }
   });
 });
+
+const interval = setInterval(function ping() {
+  wss.clients.forEach(function each(ws) {
+    if (ws.isAlive === false) return ws.terminate();
+
+    ws.isAlive = false;
+    ws.ping(noop);
+  });
+}, 30000);
 
 
 server.listen(process.env.PORT || 3001, () => {
@@ -81,9 +110,28 @@ const broadcastMessage = (ws, message) => {
 };
 
 const isValidMessage = ({ user, text, date }) => {
-  console.log(user, text, date);
   if (!user || !text || !date) {
     return false;
   }
   return true;
 };
+
+const disconnectUser = (userName) => {
+  const user = users.get(userName);
+  clearInterval(user.timeout);
+  user.ws.close();
+  users.delete(userName);
+}
+
+const createNewTimeout = (userName) => {
+  return setTimeout(() => disconnectUser(userName), inactivityTimeout);
+}
+
+const resetInactivityTimer = (userObj, userName) => {
+  clearInterval(userObj.timeout);
+  userObj.timeout = createNewTimeout(userName);
+}
+
+
+const noop = () => {}
+

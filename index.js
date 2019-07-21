@@ -1,6 +1,7 @@
 const express = require('express');
 const http = require('http');
 const ws = require('ws');
+var cors = require('cors');
 const winston = require('winston');
 
 const logger = winston.createLogger({
@@ -17,6 +18,7 @@ const logger = winston.createLogger({
 });
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 const server = http.createServer(app);
 
@@ -25,23 +27,35 @@ const inactivityTimeout = process.env.INACTIVITY_TIMEOUT || 30 * 1000;
 
 //Authentication of user
 app.post('/login', function(req, res) {
-  
   const body = req.body;
   if (!req.body.user) {
-    logger.error({url: req.originalUrl, ip: req.ip, status: 400, error: 'Bad request'});
+    logger.error({
+      url: req.originalUrl,
+      ip: req.ip,
+      status: 400,
+      error: 'Bad request'
+    });
     return res.status(400).send('Bad request');
   }
   if (users.has(body.user)) {
-    logger.warn({url: req.originalUrl, ip: req.ip, status: 409, error: 'User with such name already exists'});
+    logger.warn({
+      url: req.originalUrl,
+      ip: req.ip,
+      status: 409,
+      error: 'User with such name already exists'
+    });
     return res.status(409).send('User with such name already exists');
   } else {
     users.set(body.user, { ws: null, timeout: null });
-    logger.info({url: req.originalUrl, ip: req.ip, status: 200, text: `${body.user} succesfully logged in`});
+    logger.info({
+      url: req.originalUrl,
+      ip: req.ip,
+      status: 200,
+      text: `${body.user} succesfully logged in`
+    });
     return res.send({ user: body.user });
   }
 });
-
-
 
 //initialize the WebSocket server instance
 const wss = new ws.Server({ server: server, path: '/ws' });
@@ -60,14 +74,12 @@ wss.on('connection', (ws, req) => {
   const userName = current_url.searchParams.get('user');
   ws.userName = userName;
 
-  logger.info({user: userName, status: 'conected'});
+  logger.info({ user: userName, status: 'conected' });
   broadcastMessage(ws, {
     type: 'clientStatus',
-    text: `${userName} joined the chat.`
+    text: `${userName} joined the chat.`,
+    date: { timestamp: Date.now(), formatted: new Date().toDateString() }
   });
-
-  //todo remove
-  users.set(userName, { ws: null, timeout: null });
 
   const user = users.get(userName);
   user.ws = ws;
@@ -91,7 +103,7 @@ wss.on('connection', (ws, req) => {
           status: 'Success'
         })
       );
-      broadcastMessage(ws, message);
+      broadcastMessage(ws, messageObj);
       resetInactivityTimer(user, userName);
     } else {
       returnError(ws, 'Data not valid');
@@ -100,10 +112,11 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     users.delete(userName);
-    logger.info({user: userName, status: 'disconnected'});
+    logger.info({ user: userName, status: 'disconnected' });
     broadcastMessage(ws, {
       type: 'clientStatus',
-      text: `${userName} has left the chat.`
+      text: `${userName} has left the chat.`,
+      date: { timestamp: Date.now(), formatted: new Date().toDateString() }
     });
   });
 });
@@ -112,10 +125,11 @@ const interval = setInterval(function ping() {
   wss.clients.forEach(function each(ws) {
     if (ws.isAlive === false) {
       users.delete(userName);
-      logger.info({user: userName, status: 'conection lost'});
+      logger.info({ user: userName, status: 'conection lost' });
       broadcastMessage(ws, {
         type: 'clientStatus',
-        text: `${ws.userName} left chat, connection lost.`
+        text: `${ws.userName} left chat, connection lost.`,
+        date: { timestamp: Date.now(), formatted: new Date().toDateString() }
       });
       return ws.terminate();
     }
@@ -159,14 +173,17 @@ const isValidMessage = ({ user, text, date }) => {
 
 const disconnectUser = userName => {
   const user = users.get(userName);
-  clearInterval(user.timeout);
-  user.ws.close();
-  users.delete(userName);
-  logger.info({user: userName, status: 'disconnected due to inactivity'});
-  broadcastMessage(user.ws, {
-    type: 'clientStatus',
-    text: `${userName} was disconnected due to inactivity.`
-  });
+  if (user) {
+    clearInterval(user.timeout);
+    user.ws.close();
+    users.delete(userName);
+    logger.info({ user: userName, status: 'disconnected due to inactivity' });
+    broadcastMessage(user.ws, {
+      type: 'clientStatus',
+      text: `${userName} was disconnected due to inactivity.`,
+      date: { timestamp: Date.now(), formatted: new Date().toDateString() }
+    });
+  }
 };
 
 const createNewTimeout = userName => {
@@ -184,7 +201,7 @@ function shutDown() {
   logger.info('Server is starting to shut down');
   setTimeout(() => {
     logger.error('Shutting down took to long, terminating.');
-    process.exit(1)
+    process.exit(1);
   }, 10000).unref();
   server.close(() => {
     logger.info('Server has been shut down');
